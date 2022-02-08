@@ -34,6 +34,7 @@ All notable, unreleased changes to this project will be documented in this file.
 - Add validation of unavailable products in the checkout. Mutations: `CheckoutShippingMethodUpdate`,
 `CheckoutAddPromoCode`, `CheckoutPaymentCreate` will raise a ValidationError when product in the checkout is
 unavailable - #8978 by @IKarbowiak
+- Fix crash when Avalara plugin was used together with Webhooks plugin for shipping methods - #9121 by @rafalp
 
 # 3.0.0 [Unreleased]
 
