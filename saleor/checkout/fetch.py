@@ -16,7 +16,6 @@ from typing import (
 from django.utils.encoding import smart_text
 from django.utils.functional import SimpleLazyObject
 
-from ..core.taxes import zero_taxed_money
 from ..discount import DiscountInfo, VoucherType
 from ..discount.utils import fetch_active_discounts
 from ..shipping.interface import ShippingMethodData
@@ -465,16 +464,12 @@ def get_valid_internal_shipping_method_list_for_checkout_info(
 
     country_code = shipping_address.country.code if shipping_address else None
 
-    line_totals = [
-        base_calculations.calculate_base_line_total_price(
-            line,
-            checkout_info.channel,
-            discounts,
-        ).price_with_sale
-        for line in lines
-    ]
-
-    subtotal = sum(line_totals, zero_taxed_money(checkout_info.checkout.currency))
+    subtotal = base_calculations.base_checkout_lines_total(
+        lines,
+        checkout_info.channel,
+        checkout_info.checkout.currency,
+        discounts,
+    )
     subtotal -= checkout_info.checkout.discount
 
     valid_shipping_methods = get_valid_internal_shipping_methods_for_checkout(
