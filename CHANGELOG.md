@@ -31,6 +31,7 @@ All notable, unreleased changes to this project will be documented in this file.
 - Add `COLLECTION_CREATED`, `COLLECTION_UPDATED`, `COLLECTION_DELETED` events and webhooks - #8974 by @rafalp
 - Fix crash when too long translation strings were passed to `translate` mutations - #8942 by rafalp
 - Make collections names non-unique - #8986 by @rafalp
+- Require manage orders for fetching `user.orders` - #9128 by @IKarbowiak
 
 # 3.0.0 [Unreleased]
 
@@ -317,6 +318,9 @@ All notable, unreleased changes to this project will be documented in this file.
 - Do no allow using `id` for updating checkout and order metadata - #8906 by @IKarbowiak
   - Use `token` instead
 - Sign JWT tokens with RS256 instead of HS256 - #7990 by @korycins
+- Require manage orders for fetching `user.orders` - #9128 by @IKarbowiak
+  - only staff with `manage orders` and can fetch customer orders
+  - the customer can fetch his own orders, except drafts
 
 ### Other
 
