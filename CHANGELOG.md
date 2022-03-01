@@ -14,6 +14,8 @@ All notable, unreleased changes to this project will be documented in this file.
 
 # 3.1.0
 
+# 3.1.0
+
 ### Breaking changes
 
 #### Plugins
