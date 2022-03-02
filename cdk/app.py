@@ -9,11 +9,19 @@ from aws_cdk import (
     aws_servicediscovery,
     core,
     aws_appmesh,
-    aws_logs
+    aws_logs,
+    aws_ecr_assets,
+    aws_ecr,
+    aws_ecs_patterns
 )
+from aws_cdk.aws_route53 import HostedZone
+from aws_cdk.aws_certificatemanager import Certificate
+from aws_cdk.aws_elasticloadbalancingv2 import SslPolicy
+
 
 from os import getenv
-
+import os
+dirname = os.path.dirname(__file__)
 
 # Creating a construct that will populate the required objects created in the platform repo such as vpc, ecs cluster, and service discovery namespace
 class BasePlatform(core.Construct):
@@ -56,71 +64,128 @@ class SaleorService(core.Stack):
 
         self.base_platform = BasePlatform(self, self.stack_name)
 
-        self.fargate_task_def = aws_ecs.TaskDefinition(
-            self, "TaskDef",
-            compatibility=aws_ecs.Compatibility.EC2_AND_FARGATE,
-            cpu='256',
-            memory_mib='512',
-            #appmesh-proxy-uncomment
-            # proxy_configuration=aws_ecs.AppMeshProxyConfiguration( 
-            #     container_name="envoy", #App Mesh side card name that will proxy the requests 
-            #     properties=aws_ecs.AppMeshProxyConfigurationProps(
-            #         app_ports=[3000], # saleor application port
-            #         proxy_ingress_port=15000, # side card default config
-            #         proxy_egress_port=15001, # side card default config
-            #         egress_ignored_i_ps=["169.254.170.2","169.254.169.254"], # side card default config
-            #         ignored_uid=1337 # side card default config
-            #     )
-            # )
-            #appmesh-proxy-uncomment
-        )
+        # self.fargate_task_def = aws_ecs.TaskDefinition(
+        #     self, "TaskDef",
+        #     compatibility=aws_ecs.Compatibility.EC2_AND_FARGATE,
+        #     cpu='256',
+        #     memory_mib='512',
+        #     #appmesh-proxy-uncomment
+        #     # proxy_configuration=aws_ecs.AppMeshProxyConfiguration( 
+        #     #     container_name="envoy", #App Mesh side card name that will proxy the requests 
+        #     #     properties=aws_ecs.AppMeshProxyConfigurationProps(
+        #     #         app_ports=[3000], # saleor application port
+        #     #         proxy_ingress_port=15000, # side card default config
+        #     #         proxy_egress_port=15001, # side card default config
+        #     #         egress_ignored_i_ps=["169.254.170.2","169.254.169.254"], # side card default config
+        #     #         ignored_uid=1337 # side card default config
+        #     #     )
+        #     # )
+        #     #appmesh-proxy-uncomment
+        # )
         
-        self.logGroup = aws_logs.LogGroup(self,"ecsSGFSaleor",
+        self.logGroup = aws_logs.LogGroup(self,"ecsSGFSaleor-core",
             # log_group_name="ecsSGF-saleor",
             retention=aws_logs.RetentionDays.ONE_WEEK
         )
+       # asset = aws_ecr_assets.DockerImageAsset(self, 'saleor-image', directory=os.path.join(dirname, "..", "."))
         
+        repository = aws_ecr.Repository.from_repository_name(self,"sgf-saleor-repo","aws-cdk/assets")
         
-        self.container = self.fargate_task_def.add_container(
-            "SaleorServiceContainerDef",
-            image=aws_ecs.ContainerImage.from_registry("public.ecr.aws/aws-containers/ecsdemo-nodejs"),
-            #image=aws_ecs.ContainerImage.from_asset("../"),
-            memory_reservation_mib=128,
-            logging=aws_ecs.LogDriver.aws_logs(
-                stream_prefix='/saleor-container',
-                log_group=self.logGroup
-            ),
-            environment={
-                "REGION": getenv('AWS_DEFAULT_REGION')
-            },
-            container_name="saleor-app"
+      #  domain_zone = HostedZone.from_lookup(self, "Zone", domain_name="api.sourcegoodfood.com")
+      #  certificate = Certificate.from_certificate_arn(self, "Cert", "arn:aws:acm:us-east-1:123456:certificate/abcdefg")
+        
+        load_balanced_fargate_service = aws_ecs_patterns.ApplicationLoadBalancedFargateService(self, "ecsSGF-Saleor",
+        cluster=self.base_platform.ecs_cluster,
+        cloud_map_options = aws_ecs.CloudMapOptions(
+                 cloud_map_namespace=self.base_platform.sd_namespace,
+                 name='ecsSGF-Saleor'),
+        cpu=512,
+        memory_limit_mib=1024,
+        
+        task_image_options=aws_ecs_patterns.ApplicationLoadBalancedTaskImageOptions(
+                image=aws_ecs.ContainerImage.from_ecr_repository(repository,"latest"),
+                #image=aws_ecs.ContainerImage.from_registry("public.ecr.aws/aws-containers/ecsdemo-nodejs"),
+                enable_logging =True,
+                container_port=8000,
+                container_name="saleor-app",
+                log_driver =aws_ecs.LogDriver.aws_logs(
+                         stream_prefix='/saleor-container',
+                         log_group=self.logGroup
+                     ),
+                environment={
+                    "REGION": getenv('AWS_DEFAULT_REGION'),
+                    "ALLOWED_HOSTS":".ap-south-1.elb.amazonaws.com,locahost,127.0.0.1"
+                },
+                family = "ecs-SGF"        
+                 
+                ),
+        security_groups=[self.base_platform.services_sec_grp],
+     #   desired_task_count = 1,
+     #   certificate=certificate,
+     #   ssl_policy=SslPolicy.RECOMMENDED,
+     #   domain_name="api.sourcegoodfood.com",
+        #redirect_http  = True
+    )
+
+        load_balanced_fargate_service.target_group.configure_health_check(
+            path="/custom-health-path"
+        )
+        
+        scalable_target = load_balanced_fargate_service.service.auto_scale_task_count(
+        min_capacity=1,
+        max_capacity=20
         )
 
-        self.container.add_port_mappings(
-            aws_ecs.PortMapping(
-                container_port=8000
-            )
+        scalable_target.scale_on_cpu_utilization("CpuScaling",
+            target_utilization_percent=50
         )
+        
+        scalable_target.scale_on_memory_utilization("MemoryScaling",
+            target_utilization_percent=50
+        )
+                
+        # self.container = self.fargate_task_def.add_container(
+        #     "SaleorServiceContainerDef",
+        #     #image=aws_ecs.ContainerImage.from_registry("772686018633.dkr.ecr.ap-south-1.amazonaws.com/as-cdk/assets:latest"),
+        #     #image=aws_ecs.ContainerImage.from_registry("public.ecr.aws/aws-containers/ecsdemo-nodejs"),
+        #     image=aws_ecs.ContainerImage.from_ecr_repository(repository,"latest" ),
+        #     #image=aws_ecs.ContainerImage.from_asset("../"),
+        #     memory_reservation_mib=128,
+        #     logging=aws_ecs.LogDriver.aws_logs(
+        #         stream_prefix='/saleor-container',
+        #         log_group=self.logGroup
+        #     ),
+        #     environment={
+        #         "REGION": getenv('AWS_DEFAULT_REGION')
+        #     },
+        #     container_name="saleor-app"
+        # )
 
-        self.fargate_service = aws_ecs.FargateService(
-            self, "SaleorFargateService",
-            service_name='ecsSGF-Saleor',
-            task_definition=self.fargate_task_def,
-            cluster=self.base_platform.ecs_cluster,
-            security_group=self.base_platform.services_sec_grp,
-            desired_count=1,
-            cloud_map_options=aws_ecs.CloudMapOptions(
-                cloud_map_namespace=self.base_platform.sd_namespace,
-                name='ecsSGF-Saleor'
-            )
-        )
+        # self.container.add_port_mappings(
+        #     aws_ecs.PortMapping(
+        #         container_port=8000
+        #     )
+        # )
 
-        self.fargate_task_def.add_to_task_role_policy(
-            aws_iam.PolicyStatement(
-                actions=['ec2:DescribeSubnets'],
-                resources=['*']
-            )
-        )
+        # self.fargate_service = aws_ecs.FargateService(
+        #     self, "SaleorFargateService",
+        #     service_name='ecsSGF-Saleor',
+        #     task_definition=self.fargate_task_def,
+        #     cluster=self.base_platform.ecs_cluster,
+        #     security_group=self.base_platform.services_sec_grp,
+        #     desired_count=1,
+        #     cloud_map_options=aws_ecs.CloudMapOptions(
+        #         cloud_map_namespace=self.base_platform.sd_namespace,
+        #         name='ecsSGF-Saleor'
+        #     )
+        # )
+
+        # self.fargate_task_def.add_to_task_role_policy(
+        #     aws_iam.PolicyStatement(
+        #         actions=['ec2:DescribeSubnets'],
+        #         resources=['*']
+        #     )
+        # )
         
         # Enable Service Autoscaling
         # self.autoscale = self.fargate_service.auto_scale_task_count(
@@ -139,76 +204,76 @@ class SaleorService(core.Stack):
         # self.appmesh()
         
         
-    def appmesh(self):
+    # def appmesh(self):
         
-        # Importing app mesh service
-        self.mesh = aws_appmesh.Mesh.from_mesh_arn(
-            self,
-            "EcsSGF-AppMesh",
-            mesh_arn=core.Fn.import_value("MeshArn")
-        )
+    #     # Importing app mesh service
+    #     self.mesh = aws_appmesh.Mesh.from_mesh_arn(
+    #         self,
+    #         "EcsSGF-AppMesh",
+    #         mesh_arn=core.Fn.import_value("MeshArn")
+    #     )
         
-        # Importing App Mesh virtual gateway
-        self.mesh_vgw = aws_appmesh.VirtualGateway.from_virtual_gateway_attributes(
-            self,
-            "Mesh-VGW",
-            mesh=self.mesh,
-            virtual_gateway_name=core.Fn.import_value("MeshVGWName")
-        )
+    #     # Importing App Mesh virtual gateway
+    #     self.mesh_vgw = aws_appmesh.VirtualGateway.from_virtual_gateway_attributes(
+    #         self,
+    #         "Mesh-VGW",
+    #         mesh=self.mesh,
+    #         virtual_gateway_name=core.Fn.import_value("MeshVGWName")
+    #     )
         
-        # App Mesh virtual node configuration
-        self.mesh_saleor_vn = aws_appmesh.VirtualNode(
-            self,
-            "MeshSaleorNode",
-            mesh=self.mesh,
-            virtual_node_name="saleor",
-            listeners=[aws_appmesh.VirtualNodeListener.http(port=8000)],
-            service_discovery=aws_appmesh.ServiceDiscovery.cloud_map(self.fargate_service.cloud_map_service),
-            access_log=aws_appmesh.AccessLog.from_file_path("/dev/stdout")
-        )
+    #     # App Mesh virtual node configuration
+    #     self.mesh_saleor_vn = aws_appmesh.VirtualNode(
+    #         self,
+    #         "MeshSaleorNode",
+    #         mesh=self.mesh,
+    #         virtual_node_name="saleor",
+    #         listeners=[aws_appmesh.VirtualNodeListener.http(port=8000)],
+    #         service_discovery=aws_appmesh.ServiceDiscovery.cloud_map(self.fargate_service.cloud_map_service),
+    #         access_log=aws_appmesh.AccessLog.from_file_path("/dev/stdout")
+    #     )
         
-        # App Mesh envoy proxy container configuration
-        self.envoy_container = self.fargate_task_def.add_container(
-            "SaleorServiceProxyContdef",
-            image=aws_ecs.ContainerImage.from_asset("../"),
-            container_name="envoy",
-            memory_reservation_mib=128,
-            environment={
-                "REGION": getenv('AWS_DEFAULT_REGION'),
-                "ENVOY_LOG_LEVEL": "trace",
-                "ENABLE_ENVOY_STATS_TAGS": "1",
-                # "ENABLE_ENVOY_XRAY_TRACING": "1",
-                "APPMESH_RESOURCE_ARN": self.mesh_saleor_vn.virtual_saleor_arn
-            },
-            essential=True,
-            logging=aws_ecs.LogDriver.aws_logs(
-                stream_prefix='/mesh-envoy-container',
-                log_group=self.logGroup
-            ),
-            health_check=aws_ecs.HealthCheck(
-                interval=core.Duration.seconds(5),
-                timeout=core.Duration.seconds(10),
-                retries=10,
-                command=["CMD-SHELL","curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"],
-            ),
-            user="1337"
-        )
+    #     # App Mesh envoy proxy container configuration
+    #     self.envoy_container = self.fargate_task_def.add_container(
+    #         "SaleorServiceProxyContdef",
+    #         image=aws_ecs.ContainerImage.from_asset("../"),
+    #         container_name="envoy",
+    #         memory_reservation_mib=128,
+    #         environment={
+    #             "REGION": getenv('AWS_DEFAULT_REGION'),
+    #             "ENVOY_LOG_LEVEL": "trace",
+    #             "ENABLE_ENVOY_STATS_TAGS": "1",
+    #             # "ENABLE_ENVOY_XRAY_TRACING": "1",
+    #             "APPMESH_RESOURCE_ARN": self.mesh_saleor_vn.virtual_saleor_arn
+    #         },
+    #         essential=True,
+    #         logging=aws_ecs.LogDriver.aws_logs(
+    #             stream_prefix='/mesh-envoy-container',
+    #             log_group=self.logGroup
+    #         ),
+    #         health_check=aws_ecs.HealthCheck(
+    #             interval=core.Duration.seconds(5),
+    #             timeout=core.Duration.seconds(10),
+    #             retries=10,
+    #             command=["CMD-SHELL","curl -s http://localhost:9901/server_info | grep state | grep -q LIVE"],
+    #         ),
+    #         user="1337"
+    #     )
         
-        self.envoy_container.add_ulimits(aws_ecs.Ulimit(
-            hard_limit=15000,
-            name=aws_ecs.UlimitName.NOFILE,
-            soft_limit=15000
-            )
-        )
+    #     self.envoy_container.add_ulimits(aws_ecs.Ulimit(
+    #         hard_limit=15000,
+    #         name=aws_ecs.UlimitName.NOFILE,
+    #         soft_limit=15000
+    #         )
+    #     )
         
-        # Primary container needs to depend on envoy before it can be reached out
-        self.container.add_container_dependencies(aws_ecs.ContainerDependency(
-               container=self.envoy_container,
-               condition=aws_ecs.ContainerDependencyCondition.HEALTHY
-           )
-        )
+    #     # Primary container needs to depend on envoy before it can be reached out
+    #     self.container.add_container_dependencies(aws_ecs.ContainerDependency(
+    #           container=self.envoy_container,
+    #           condition=aws_ecs.ContainerDependencyCondition.HEALTHY
+    #       )
+    #     )
         
-        # Enable app mesh Xray observability
+    #     # Enable app mesh Xray observability
         #ammmesh-xray-uncomment
         # self.xray_container = self.fargate_task_def.add_container(
         #     "SaleorServiceXrayContdef",
@@ -230,38 +295,38 @@ class SaleorService(core.Stack):
         # )
         #ammmesh-xray-uncomment
 
-        self.fargate_task_def.add_to_task_role_policy(
-            aws_iam.PolicyStatement(
-                actions=['ec2:DescribeSubnets'],
-                resources=['*']
-            )
-        )
+        # self.fargate_task_def.add_to_task_role_policy(
+        #     aws_iam.PolicyStatement(
+        #         actions=['ec2:DescribeSubnets'],
+        #         resources=['*']
+        #     )
+        # )
         
-        self.fargate_service.connections.allow_from_any_ipv4(
-            port_range=aws_ec2.Port(protocol=aws_ec2.Protocol.TCP, string_representation="tcp_8000", from_port=8000, to_port=8000),
-            description="Allow TCP connections on port 8000"
-        )
+        # self.fargate_service.connections.allow_from_any_ipv4(
+        #     port_range=aws_ec2.Port(protocol=aws_ec2.Protocol.TCP, string_representation="tcp_8000", from_port=8000, to_port=8000),
+        #     description="Allow TCP connections on port 8000"
+        # )
         
-        # Adding policies to work with observability (xray and cloudwath)
-        self.fargate_task_def.execution_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
-        self.fargate_task_def.execution_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"))
-        self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
-        # self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess"))
-        self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess"))
+        # # Adding policies to work with observability (xray and cloudwath)
+        # self.fargate_task_def.execution_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AmazonEC2ContainerRegistryReadOnly"))
+        # self.fargate_task_def.execution_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchLogsFullAccess"))
+        # self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("CloudWatchFullAccess"))
+        # # self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess"))
+        # self.fargate_task_def.task_role.add_managed_policy(aws_iam.ManagedPolicy.from_aws_managed_policy_name("AWSAppMeshEnvoyAccess"))
         
         
-        # Adding mesh virtual service 
-        self.mesh_saleor_vs = aws_appmesh.VirtualService(self,"mesh-saleor-vs",
-            virtual_service_provider=aws_appmesh.VirtualServiceProvider.virtual_node(self.mesh_saleor_vn),
-            virtual_service_name="{}.{}".format(self.fargate_service.cloud_map_service.service_name,self.fargate_service.cloud_map_service.namespace.namespace_name)
-        )
+        # # Adding mesh virtual service 
+        # self.mesh_saleor_vs = aws_appmesh.VirtualService(self,"mesh-saleor-vs",
+        #     virtual_service_provider=aws_appmesh.VirtualServiceProvider.virtual_node(self.mesh_saleor_vn),
+        #     virtual_service_name="{}.{}".format(self.fargate_service.cloud_map_service.service_name,self.fargate_service.cloud_map_service.namespace.namespace_name)
+        # )
         
-        # Exporting CF (outputs) to make references from other cdk projects.
-        core.CfnOutput(self,"MeshSaleorVSARN",value=self.mesh_saleor_vs.virtual_service_arn,export_name="MeshSaleorVSARN")
-        core.CfnOutput(self,"MeshSaleorVSName",value=self.mesh_saleor_vs.virtual_service_name,export_name="MeshSaleorVSName")
+        # # Exporting CF (outputs) to make references from other cdk projects.
+        # core.CfnOutput(self,"MeshSaleorVSARN",value=self.mesh_saleor_vs.virtual_service_arn,export_name="MeshSaleorVSARN")
+        # core.CfnOutput(self,"MeshSaleorVSName",value=self.mesh_saleor_vs.virtual_service_name,export_name="MeshSaleorVSName")
         
 
-_env = core.Environment(account=getenv('AWS_ACCOUNT_ID'), region=getenv('AWS_DEFAULT_REGION'))
+_env = core.Environment(account=getenv('AWS_ACCOUNT_ID',), region=getenv('AWS_DEFAULT_REGION'))
 environment = "ecsSGF"
 stack_name = "{}-saleor".format(environment)
 app = core.App()
