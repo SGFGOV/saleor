@@ -32,6 +32,9 @@ dist/
 /node_modules/
 /static/
 
+#cdk
+cdk/cdk.context.json
+cdk/cdk.out
 # Environments
 .env
 .venv
