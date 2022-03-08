@@ -59,6 +59,7 @@ django-timezone-field==4.2.3; python_version >= "3.5"
 django-versatileimagefield==2.2
 django==3.2.12; python_version >= "3.6"
 draftjs-sanitizer==1.0.0
+django-easy-health-check==1.0.0
 enmerkar==0.7.1
 et-xmlfile==1.1.0; python_version >= "3.6"
 execnet==1.9.0; python_version >= "3.6" and python_full_version < "3.0.0" or python_full_version >= "3.5.0" and python_version >= "3.6"

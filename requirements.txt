@@ -43,6 +43,7 @@ django-storages==1.12.3; python_version >= "3.5"
 django-timezone-field==4.2.3; python_version >= "3.5"
 django-versatileimagefield==2.2
 django==3.2.12; python_version >= "3.6"
+django-easy-health-check==1.0.0
 draftjs-sanitizer==1.0.0
 enmerkar==0.7.1
 et-xmlfile==1.1.0; python_version >= "3.6"

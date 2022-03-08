@@ -1,6 +1,7 @@
 import ast
 import os.path
 import warnings
+from . import ecs_deployment
 from datetime import timedelta
 
 import dj_database_url
@@ -185,6 +186,7 @@ JWT_MANAGER_PATH = os.environ.get(
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "easy_health_check.middleware.HealthCheckMiddleware",
     "django.middleware.common.CommonMiddleware",
     "saleor.core.middleware.request_time",
     "saleor.core.middleware.discounts",
@@ -405,7 +407,7 @@ TEST_RUNNER = "saleor.tests.runner.PytestTestRunner"
 
 PLAYGROUND_ENABLED = get_bool_from_env("PLAYGROUND_ENABLED", True)
 
-ALLOWED_HOSTS = get_list(os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1"))
+ALLOWED_HOSTS = get_list(os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1"))+ecs_deployment.get_ecs_task_ips()
 ALLOWED_GRAPHQL_ORIGINS = get_list(os.environ.get("ALLOWED_GRAPHQL_ORIGINS", "*"))
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -686,6 +688,14 @@ JWT_TTL_REFRESH = timedelta(seconds=parse(os.environ.get("JWT_TTL_REFRESH", "30 
 JWT_TTL_REQUEST_EMAIL_CHANGE = timedelta(
     seconds=parse(os.environ.get("JWT_TTL_REQUEST_EMAIL_CHANGE", "1 hour")),
 )
+
+#easy health_checl
+DJANGO_EASY_HEALTH_CHECK = {
+    "PATH": "/healthcheck/",
+    "RETURN_STATUS_CODE": 200,
+    "RETURN_BYTE_DATA": "",
+    "RETURN_HEADERS": None
+}
 
 # Support multiple interface notation in schema for Apollo tooling.
 
